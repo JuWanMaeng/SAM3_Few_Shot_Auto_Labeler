@@ -941,19 +941,24 @@ class Sam3TrackerBase(torch.nn.Module):
         mask_inputs,
         output_dict,
         num_frames,
-        track_in_reverse=False,  # tracking in reverse time order (for demo usage)
-        # Whether to run the memory encoder on the predicted masks. Sometimes we might want
-        # to skip the memory encoder with `run_mem_encoder=False`. For example,
-        # in demo we might call `track_step` multiple times for each user click,
-        # and only encode the memory when the user finalizes their clicks. And in ablation
-        # settings like SAM training on static images, we don't need the memory encoder.
+        track_in_reverse=False,  # 시간 역순으로 추적할지 여부 (주로 데모 용도)
+        # 예측된 마스크에 대해 메모리 인코더를 실행할지 여부입니다.
+        # 때때로 `run_mem_encoder=False`로 설정하여 메모리 인코더 실행을 건너뛰고 싶을 수 있습니다.
+        # 예를 들어, 데모에서는 사용자의 클릭마다 `track_step`을 여러 번 호출할 수 있으며,
+        # 사용자가 클릭을 확정한 후에만 메모리를 인코딩하고 싶을 수 있습니다.
+        # 또한 정지 이미지에서 SAM을 훈련하는 것과 같은 상황에서는 메모리 인코더가 필요하지 않습니다.
         run_mem_encoder=True,
-        # The previously predicted SAM mask logits (which can be fed together with new clicks in demo).
+        # 이전에 예측된 SAM 마스크 로짓(logits)입니다. (데모에서 새로운 클릭과 함께 입력될 수 있음).
         prev_sam_mask_logits=None,
         use_prev_mem_frame=True,
     ):
+        """
+        단일 프레임에 대한 추적 단계를 수행합니다.
+        """
         current_out = {"point_inputs": point_inputs, "mask_inputs": mask_inputs}
-        # High-resolution feature maps for the SAM head, reshape (HW)BC => BCHW
+
+        # SAM 헤드를 위한 고해상도 특징 맵(feature maps)을 준비합니다.
+        # (HW)BC 형태를 BCHW 형태로 reshape합니다.
         if len(current_vision_feats) > 1:
             high_res_features = [
                 x.permute(1, 2, 0).view(x.size(1), x.size(2), *s)
@@ -961,15 +966,19 @@ class Sam3TrackerBase(torch.nn.Module):
             ]
         else:
             high_res_features = None
+
         if mask_inputs is not None:
-            # (see it as a GT mask) without using a SAM prompt encoder + mask decoder.
+            # 마스크 입력이 있는 경우 (Ground Truth 마스크로 간주)
+            # SAM 프롬프트 인코더 + 마스크 디코더를 사용하지 않고 처리합니다.
             pix_feat = current_vision_feats[-1].permute(1, 2, 0)
             pix_feat = pix_feat.view(-1, self.hidden_dim, *feat_sizes[-1])
             sam_outputs = self._use_mask_as_output(
                 pix_feat, high_res_features, mask_inputs
             )
         else:
-            # fused the visual feature with previous memory features in the memory bank
+            # 시각적 특징(visual feature)과 메모리 뱅크(memory bank)의 이전 메모리 특징들을 융합합니다.
+            # 이 과정에서 현재 프레임의 정보와 과거의 기억을 결합하여 추적 성능을 높입니다.
+            
             pix_feat_with_mem = self._prepare_memory_conditioned_features(
                 frame_idx=frame_idx,
                 is_init_cond_frame=is_init_cond_frame,
@@ -981,16 +990,20 @@ class Sam3TrackerBase(torch.nn.Module):
                 track_in_reverse=track_in_reverse,
                 use_prev_mem_frame=use_prev_mem_frame,
             )
-            # apply SAM-style segmentation head
-            # here we might feed previously predicted low-res SAM mask logits into the SAM mask decoder,
-            # e.g. in demo where such logits come from earlier interaction instead of correction sampling
-            # (in this case, the SAM mask decoder should have `self.iter_use_prev_mask_pred=True`, and
-            # any `mask_inputs` shouldn't reach here as they are sent to _use_mask_as_output instead)
+
+            # SAM 스타일의 세그멘테이션 헤드(segmentation head)를 적용합니다.
+            # 여기서 이전에 예측된 저해상도 SAM 마스크 로짓을 SAM 마스크 디코더에 입력할 수 있습니다.
+            # 예를 들어 데모에서는 이러한 로짓이 보정 샘플링 대신 이전 상호작용에서 올 수 있습니다.
+            # (이 경우 SAM 마스크 디코더는 `self.iter_use_prev_mask_pred=True`여야 하며,
+            # `mask_inputs`는 `_use_mask_as_output`으로 전송되므로 여기에 도달해서는 안 됩니다.)
             if prev_sam_mask_logits is not None:
                 assert self.iter_use_prev_mask_pred
                 assert point_inputs is not None and mask_inputs is None
                 mask_inputs = prev_sam_mask_logits
+
             multimask_output = self._use_multimask(is_init_cond_frame, point_inputs)
+            
+            # 마스크 디코더를 실행하여 최종 마스크를 예측합니다.
             sam_outputs = self._forward_sam_heads(
                 backbone_features=pix_feat_with_mem,
                 point_inputs=point_inputs,
@@ -998,6 +1011,7 @@ class Sam3TrackerBase(torch.nn.Module):
                 high_res_features=high_res_features,
                 multimask_output=multimask_output,
             )
+
         (
             _,
             high_res_multimasks,
@@ -1007,26 +1021,30 @@ class Sam3TrackerBase(torch.nn.Module):
             obj_ptr,
             object_score_logits,
         ) = sam_outputs
-        # Use the final prediction (after all correction steps for output and eval)
+
+        # 최종 예측 결과 저장 (출력 및 평가를 위한 모든 보정 단계 이후의 결과)
         current_out["pred_masks"] = low_res_masks
         current_out["pred_masks_high_res"] = high_res_masks
         current_out["obj_ptr"] = obj_ptr
+
         if self.use_memory_selection:
+            # 메모리 선택 기능을 사용하는 경우, 점수들을 저장하고 유효 IoU 점수를 계산합니다.
             current_out["object_score_logits"] = object_score_logits
             iou_score = ious.max(-1)[0]
             current_out["iou_score"] = iou_score
             current_out["eff_iou_score"] = self.cal_mem_score(
                 object_score_logits, iou_score
             )
+
         if not self.training:
-            # Only add this in inference (to avoid unused param in activation checkpointing;
-            # it's mainly used in the demo to encode spatial memories w/ consolidated masks)
+            # 추론(inference) 시에만 추가합니다 (activation checkpointing에서 사용되지 않는 파라미터 방지).
+            # 주로 데모에서 통합된(consolidated) 마스크로 공간적 메모리를 인코딩하는 데 사용됩니다.
             current_out["object_score_logits"] = object_score_logits
 
-        # Finally run the memory encoder on the predicted mask to encode
-        # it into a new memory feature (that can be used in future frames)
-        # (note that `self.num_maskmem == 0` is primarily used for reproducing SAM on
-        # images, in which case we'll just skip memory encoder to save compute).
+        # 마지막으로 예측된 마스크에 대해 메모리 인코더를 실행하여
+        # 새로운 메모리 특징(memory feature)으로 인코딩합니다 (이후 프레임에서 사용됨).
+        # (`self.num_maskmem == 0`인 경우는 주로 이미지에서 SAM을 재현할 때 사용되며,
+        # 이 경우 계산을 줄이기 위해 메모리 인코더를 건너뜁니다.)
         if run_mem_encoder and self.num_maskmem > 0:
             high_res_masks_for_mem_enc = high_res_masks
             maskmem_features, maskmem_pos_enc = self._encode_new_memory(
@@ -1045,14 +1063,14 @@ class Sam3TrackerBase(torch.nn.Module):
             current_out["maskmem_features"] = None
             current_out["maskmem_pos_enc"] = None
 
-        # Optionally, offload the outputs to CPU memory during evaluation to avoid
-        # GPU OOM on very long videos or very large resolution or too many objects
+        # 선택적으로, 평가(evaluation) 중에 출력을 CPU 메모리로 오프로드하여
+        # 매우 긴 비디오나 매우 큰 해상도 또는 너무 많은 객체로 인한 GPU OOM(Out Of Memory)을 방지합니다.
         if self.offload_output_to_cpu_for_eval and not self.training:
-            # Here we only keep those keys needed for evaluation to get a compact output
+            # 평가에 필요한 항목들만 유지하여 출력을 간소화합니다.
             trimmed_out = {
                 "pred_masks": current_out["pred_masks"].cpu(),
                 "pred_masks_high_res": current_out["pred_masks_high_res"].cpu(),
-                # other items for evaluation (these are small tensors so we keep them on GPU)
+                # 평가를 위한 다른 항목들 (이것들은 작은 텐서이므로 GPU에 유지)
                 "obj_ptr": current_out["obj_ptr"],
                 "object_score_logits": current_out["object_score_logits"],
             }
@@ -1064,12 +1082,14 @@ class Sam3TrackerBase(torch.nn.Module):
                 trimmed_out["eff_iou_score"] = current_out["eff_iou_score"].cpu()
             current_out = trimmed_out
 
-        # Optionally, trim the output of past non-conditioning frame (r * num_maskmem frames
-        # before the current frame) during evaluation. This is intended to save GPU or CPU
-        # memory for semi-supervised VOS eval, where only the first frame receives prompts.
+        # 선택적으로, 평가 중에 과거의 비조건부(non-conditioning) 프레임 출력을 정리(trim)합니다.
+        # (현재 프레임보다 r * num_maskmem 프레임 이전의 것들)
+        # 이는 첫 번째 프레임만 프롬프트를 받는 준지도(semi-supervised) VOS 평가에서
+        # GPU 또는 CPU 메모리를 절약하기 위한 것입니다.
         def _trim_past_out(past_out, current_out):
             if past_out is None:
                 return None
+            # 필요한 정보만 남기고 나머지는 제거하여 메모리를 절약합니다.
             return {
                 "pred_masks": past_out["pred_masks"],
                 "obj_ptr": past_out["obj_ptr"],
@@ -1082,18 +1102,19 @@ class Sam3TrackerBase(torch.nn.Module):
             past_out = output_dict["non_cond_frame_outputs"].get(past_frame_idx, None)
 
             if past_out is not None:
-                print(past_out.get("eff_iou_score", 0))
+                # print(past_out.get("eff_iou_score", 0)) # 디버깅용 출력
                 if (
                     self.use_memory_selection
                     and past_out.get("eff_iou_score", 0) < self.mf_threshold
                 ) or not self.use_memory_selection:
+                    # 메모리 선택 기준을 만족하지 못하거나 사용하지 않는 경우, 과거 출력을 정리합니다.
                     output_dict["non_cond_frame_outputs"][past_frame_idx] = (
                         _trim_past_out(past_out, current_out)
                     )
 
             if (
                 self.use_memory_selection and not self.offload_output_to_cpu_for_eval
-            ):  ## design for memory selection, trim too old frames to save memory
+            ):  # 메모리 선택을 위한 설계, 너무 오래된 프레임을 정리하여 메모리를 절약합니다.
                 far_old_frame_idx = frame_idx - 20 * self.max_obj_ptrs_in_encoder
                 past_out = output_dict["non_cond_frame_outputs"].get(
                     far_old_frame_idx, None

@@ -64,22 +64,31 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
         offload_state_to_cpu=False,
         async_loading_frames=False,
     ):
-        """Initialize a inference state."""
+        """
+        추론 상태(inference state)를 초기화합니다.
+        비디오 프레임, 입력 프롬프트, 모델 출력 결과 등을 저장할 딕셔너리를 생성하고 설정합니다.
+        """
         inference_state = {}
-        # whether to offload the video frames to CPU memory
-        # turning on this option saves the GPU memory with only a very small overhead
+        
+        # 비디오 프레임(이미지)을 CPU 메모리로 오프로드할지 여부 설정
+        # 이 옵션을 켜면 약간의 오버헤드만으로 GPU 메모리를 크게 절약할 수 있습니다.
         inference_state["offload_video_to_cpu"] = offload_video_to_cpu
-        # whether to offload the inference state to CPU memory
-        # turning on this option saves the GPU memory at the cost of a lower tracking fps
-        # (e.g. in a test case of 768x768 model, fps dropped from 27 to 24 when tracking one object
-        # and from 24 to 21 when tracking two objects)
+        
+        # 추론 상태(state) 자체를 CPU 메모리로 오프로드할지 여부 설정
+        # 이 옵션을 켜면 GPU 메모리는 절약되지만, 추적 FPS(속도)가 저하됩니다.
+        # (예: 768x768 모델 테스트 시, 객체 1개 추적 27->24 FPS, 객체 2개 추적 24->21 FPS로 하락)
         inference_state["offload_state_to_cpu"] = offload_state_to_cpu
+        
+        # 현재 연산에 사용할 디바이스 설정 (주로 CUDA)
         inference_state["device"] = self.device
+        
+        # 데이터를 저장할 디바이스 설정 (옵션에 따라 CPU 또는 CUDA)
         if offload_state_to_cpu:
             inference_state["storage_device"] = torch.device("cpu")
         else:
             inference_state["storage_device"] = torch.device("cuda")
 
+        # 비디오 경로가 주어진 경우, 비디오 프레임을 로드합니다.
         if video_path is not None:
             images, video_height, video_width = load_video_frames(
                 video_path=video_path,
@@ -93,45 +102,59 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
             inference_state["video_height"] = video_height
             inference_state["video_width"] = video_width
         else:
-            # the original video height and width, used for resizing final output scores
+            # 비디오 경로가 없는 경우, 메타데이터(크기, 프레임 수)만 설정
+            # (최종 출력 점수 등을 리사이징할 때 원본 해상도 정보로 사용됨)
             inference_state["video_height"] = video_height
             inference_state["video_width"] = video_width
             inference_state["num_frames"] = num_frames
-        # inputs on each frame
+            
+        # 각 프레임별 입력(포인트, 마스크)을 저장할 딕셔너리 초기화
         inference_state["point_inputs_per_obj"] = {}
         inference_state["mask_inputs_per_obj"] = {}
-        # visual features on a small number of recently visited frames for quick interactions
+        
+        # 빠른 상호작용을 위해 최근 방문한 소수의 프레임에 대한 시각적 특징(feature)을 캐싱
         inference_state["cached_features"] = (
             {} if cached_features is None else cached_features
         )
-        # values that don't change across frames (so we only need to hold one copy of them)
+        
+        # 프레임 간 변하지 않는 상수 값들을 저장 (메모리 절약을 위해 한 카피만 유지)
         inference_state["constants"] = {}
-        # mapping between client-side object id and model-side object index
+        
+        # 클라이언트 측 객체 ID와 모델 내부 객체 인덱스 간의 매핑 정보
         inference_state["obj_id_to_idx"] = OrderedDict()
         inference_state["obj_idx_to_id"] = OrderedDict()
         inference_state["obj_ids"] = []
-        # A storage to hold the model's tracking results and states on each frame
+        
+        # 각 프레임에서의 모델 추적 결과와 상태를 저장할 저장소
         inference_state["output_dict"] = {
-            "cond_frame_outputs": {},  # dict containing {frame_idx: <out>}
-            "non_cond_frame_outputs": {},  # dict containing {frame_idx: <out>}
+            "cond_frame_outputs": {},      # 조건부(프롬프트가 있는) 프레임의 출력 결과 {frame_idx: <out>}
+            "non_cond_frame_outputs": {},  # 비조건부(추론된) 프레임의 출력 결과 {frame_idx: <out>}
         }
-        # The index of the frame that received the first annotation
+        
+        # 첫 번째 어노테이션(입력)을 받은 프레임의 인덱스
         inference_state["first_ann_frame_idx"] = None
-        # Slice (view) of each object tracking results, sharing the same memory with "output_dict"
+        
+        # 각 객체별 추적 결과를 볼 수 있는 뷰(Slice), "output_dict"와 메모리를 공유함
         inference_state["output_dict_per_obj"] = {}
-        # A temporary storage to hold new outputs when user interact with a frame
-        # to add clicks or mask (it's merged into "output_dict" before propagation starts)
+        
+        # 사용자가 프레임과 상호작용(클릭/마스크 추가)할 때 새로운 출력을 임시 저장할 공간
+        # (전파(propagation)가 시작되기 전에 "output_dict"로 병합됨)
         inference_state["temp_output_dict_per_obj"] = {}
-        # Frames that already holds consolidated outputs from click or mask inputs
-        # (we directly use their consolidated outputs during tracking)
+        
+        # 클릭이나 마스크 입력으로부터 통합된(consolidated) 출력을 이미 가지고 있는 프레임 인덱스들
+        # (추적 중에는 이 통합된 출력을 바로 사용함)
         inference_state["consolidated_frame_inds"] = {
-            "cond_frame_outputs": set(),  # set containing frame indices
-            "non_cond_frame_outputs": set(),  # set containing frame indices
+            "cond_frame_outputs": set(),      # 조건부 프레임 인덱스 집합
+            "non_cond_frame_outputs": set(),  # 비조건부 프레임 인덱스 집합
         }
-        # metadata for each tracking frame (e.g. which direction it's tracked)
+        
+        # 각 추적 프레임에 대한 메타데이터 (예: 어느 방향으로 추적되었는지 등)
         inference_state["tracking_has_started"] = False
         inference_state["frames_already_tracked"] = {}
+        
+        # 비디오 내의 모든 기존 포인트 입력을 초기화
         self.clear_all_points_in_video(inference_state)
+        
         return inference_state
 
     def _obj_id_to_idx(self, inference_state, obj_id):
@@ -189,16 +212,24 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
         normalize_coords=True,
         box=None,
     ):
-        """Add new points to a frame."""
+        """
+        [기능] 특정 프레임에 새로운 점(Points)이나 박스(Box) 프롬프트를 추가합니다.
+        사용자가 클릭하거나 박스를 그릴 때 호출되는 함수입니다.
+        """
+        # 1. 클라이언트의 obj_id(예: 1)를 모델 내부의 인덱스(예: 0)로 변환, x번 id의 대한 값들 초기화
         obj_idx = self._obj_id_to_idx(inference_state, obj_id)
+        
+        # 해당 객체의 프롬프트 입력 저장소 가져오기
         point_inputs_per_frame = inference_state["point_inputs_per_obj"][obj_idx]
         mask_inputs_per_frame = inference_state["mask_inputs_per_obj"][obj_idx]
 
+        # 2. 입력값 유효성 검사 (Validation)
         if (points is not None) != (labels is not None):
-            raise ValueError("points and labels must be provided together")
+            raise ValueError("points와 labels는 반드시 함께 제공되어야 합니다.")
         if points is None and box is None:
-            raise ValueError("at least one of points or box must be provided as input")
+            raise ValueError("points 또는 box 중 하나는 반드시 입력되어야 합니다.")
 
+        # 3. 텐서(Tensor) 변환 및 초기화
         if points is None:
             points = torch.zeros(0, 2, dtype=torch.float32)
         elif not isinstance(points, torch.Tensor):
@@ -207,64 +238,76 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
             labels = torch.zeros(0, dtype=torch.int32)
         elif not isinstance(labels, torch.Tensor):
             labels = torch.tensor(labels, dtype=torch.int32)
+            
+        # 배치(Batch) 차원 추가 (SAM 모델 입력 규격 맞춤)
         if points.dim() == 2:
-            points = points.unsqueeze(0)  # add batch dimension
+            points = points.unsqueeze(0)  
         if labels.dim() == 1:
-            labels = labels.unsqueeze(0)  # add batch dimension
+            labels = labels.unsqueeze(0) 
 
+        # 4. 좌표계 변환 (상대 좌표 0~1 -> 절대 좌표 픽셀)
         if rel_coordinates:
-            # convert the points from relative coordinates to absolute coordinates
             if points is not None:
                 points = points * self.image_size
             if box is not None:
                 box = box * self.image_size
 
-        # If `box` is provided, we add it as the first two points with labels 2 and 3
-        # along with the user-provided points (consistent with how SAM 2 is trained).
+        # =========================================================================
+        # [중요] 박스 처리 로직 
+        # 박스(Box)가 들어오면 내부적으로 점(Points)으로 변환합니다.
+        # SAM 2/3 학습 방식에 맞춰 좌상단(Label 2)과 우하단(Label 3) 점으로 처리합니다.
+        # =========================================================================
         if box is not None:
             if not clear_old_points:
                 raise ValueError(
-                    "cannot add box without clearing old points, since "
-                    "box prompt must be provided before any point prompt "
-                    "(please use clear_old_points=True instead)"
+                    "박스를 추가할 때는 기존 포인트를 지워야 합니다 (clear_old_points=True)."
                 )
             if not isinstance(box, torch.Tensor):
                 box = torch.tensor(box, dtype=torch.float32, device=points.device)
+            
+            # [버그 원인 지점] 여기서 box를 (1, 2, 2)로 reshape 하므로
+            # 박스가 여러 개(N개) 들어오면 에러가 났던 것입니다.
             box_coords = box.reshape(1, 2, 2)
+            
+            # 박스 시작점(2)과 끝점(3) 라벨 생성
             box_labels = torch.tensor([2, 3], dtype=torch.int32, device=labels.device)
             box_labels = box_labels.reshape(1, 2)
+            
+            # 기존 포인트와 박스 포인트를 합침
             points = torch.cat([box_coords, points], dim=1)
             labels = torch.cat([box_labels, labels], dim=1)
 
         points = points.to(inference_state["device"])
         labels = labels.to(inference_state["device"])
 
+        # 5. 프롬프트 저장
         if not clear_old_points:
             point_inputs = point_inputs_per_frame.get(frame_idx, None)
         else:
             point_inputs = None
+        # 기존 포인트 뒤에 새 포인트를 이어 붙임
         point_inputs = concat_points(point_inputs, points, labels)
 
         point_inputs_per_frame[frame_idx] = point_inputs
-        mask_inputs_per_frame.pop(frame_idx, None)
-        # If this frame hasn't been tracked before, we treat it as an initial conditioning
-        # frame, meaning that the inputs points are to generate segments on this frame without
-        # using any memory from other frames, like in SAM. Otherwise (if it has been tracked),
-        # the input points will be used to correct the already tracked masks.
+        mask_inputs_per_frame.pop(frame_idx, None) # 포인트가 들어오면 마스크 입력은 삭제 (충돌 방지)
+
+        # 6. 추론 모드 결정 (초기 입력인지, 수정인지)
         is_init_cond_frame = frame_idx not in inference_state["frames_already_tracked"]
-        # whether to track in reverse time order
+        
+        # 역방향 추적 여부 결정
         if is_init_cond_frame:
             reverse = False
         else:
             reverse = inference_state["frames_already_tracked"][frame_idx]["reverse"]
+            
         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
         obj_temp_output_dict = inference_state["temp_output_dict_per_obj"][obj_idx]
-        # Add a frame to conditioning output if it's an initial conditioning frame or
-        # if the model sees all frames receiving clicks/mask as conditioning frames.
+
         is_cond = is_init_cond_frame or self.add_all_frames_to_correct_as_cond
         storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"
 
-        # Limit to a maximum number of input points to the prompt encoder (to reduce domain gap)
+        # 7. 입력 포인트 개수 제한 (학습 환경과의 차이 줄이기 위함)
+        # 너무 많은 점을 찍으면 앞쪽 절반, 뒤쪽 절반만 남기고 중간은 버림
         num_points = point_inputs["point_coords"].size(1)
         if num_points > self.max_point_num_in_prompt_enc > 0:
             num_first = self.max_point_num_in_prompt_enc // 2
@@ -284,15 +327,13 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
                 dim=1,
             )
             logging.warning(
-                f"Too many points ({num_points}) are provided on frame {frame_idx}. Only "
-                f"the first {num_first} points and the last {num_last} points will be used."
+                f"너무 많은 포인트({num_points})가 입력되었습니다. 처음 {num_first}개와 마지막 {num_last}개만 사용됩니다."
             )
-        # Get any previously predicted mask logits on this object and feed it along with
-        # the new clicks into the SAM mask decoder when `self.iter_use_prev_mask_pred=True`.
+
+        # 8. 이전 마스크 결과 재활용 (Iterative refinement)
+        # 사용자가 수정을 위해 클릭을 추가한 경우, 이전 추론 결과(Logits)를 힌트로 사용
         prev_sam_mask_logits = None
         if self.iter_use_prev_mask_pred:
-            # lookup temporary output dict first, which contains the most recent output
-            # (if not found, then lookup conditioning and non-conditioning frame output)
             prev_out = obj_temp_output_dict[storage_key].get(frame_idx)
             if prev_out is None:
                 prev_out = obj_output_dict["cond_frame_outputs"].get(frame_idx)
@@ -301,29 +342,28 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
 
             if prev_out is not None and prev_out["pred_masks"] is not None:
                 prev_sam_mask_logits = prev_out["pred_masks"].cuda(non_blocking=True)
-                # Clamp the scale of prev_sam_mask_logits to avoid rare numerical issues.
                 prev_sam_mask_logits = torch.clamp(prev_sam_mask_logits, -32.0, 32.0)
+
+        # 9. 단일 프레임 추론 실행 (SAM Core)
         current_out, _ = self._run_single_frame_inference(
             inference_state=inference_state,
-            output_dict=obj_output_dict,  # run on the slice of a single object
+            output_dict=obj_output_dict, 
             frame_idx=frame_idx,
-            batch_size=1,  # run on the slice of a single object
+            batch_size=1, 
             is_init_cond_frame=is_init_cond_frame,
             point_inputs=point_inputs,
             mask_inputs=None,
             reverse=reverse,
-            # Skip the memory encoder when adding clicks or mask. We execute the memory encoder
-            # at the beginning of `propagate_in_video` (after user finalize their clicks). This
-            # allows us to enforce non-overlapping constraints on all objects before encoding
-            # them into memory.
-            run_mem_encoder=False,
+            run_mem_encoder=False, # 클릭 단계에서는 메모리 인코딩을 하지 않음 (속도 최적화)
             prev_sam_mask_logits=prev_sam_mask_logits,
             use_prev_mem_frame=use_prev_mem_frame,
         )
-        # Add the output to the output dict (to be used as future memory)
+        
+        # 결과를 임시 저장소에 저장
         obj_temp_output_dict[storage_key][frame_idx] = current_out
 
-        # Resize the output mask to the original video resolution
+        # 10. 결과 병합 및 정리 (Consolidation)
+        # 다른 객체들과의 충돌을 해결하고 최종 마스크 생성
         obj_ids = inference_state["obj_ids"]
         consolidated_out = self._consolidate_temp_output_across_obj(
             inference_state,
@@ -332,10 +372,12 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
             run_mem_encoder=False,
             consolidate_at_video_res=True,
         )
+        
+        # 원본 해상도 마스크 추출
         _, video_res_masks = self._get_orig_video_res_output(
             inference_state, consolidated_out["pred_masks_video_res"]
         )
-        low_res_masks = None  # not needed by the demo
+        low_res_masks = None 
         return frame_idx, obj_ids, low_res_masks, video_res_masks
 
     @torch.inference_mode()
@@ -347,29 +389,33 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
         mask,
         add_mask_to_memory=False,
     ):
-        """Add new mask to a frame."""
+        """
+        [기능] 특정 프레임에 마스크(Mask) 자체를 프롬프트로 추가합니다.
+        사용자가 붓(Brush) 도구로 직접 칠해서 입력을 줄 때 사용됩니다.
+        """
         obj_idx = self._obj_id_to_idx(inference_state, obj_id)
         point_inputs_per_frame = inference_state["point_inputs_per_obj"][obj_idx]
         mask_inputs_per_frame = inference_state["mask_inputs_per_obj"][obj_idx]
 
+        # 1. 마스크 차원 확인
         assert mask.dim() == 2
         mask_H, mask_W = mask.shape
-        mask_inputs_orig = mask[None, None]  # add batch and channel dimension
+        mask_inputs_orig = mask[None, None] # (Batch, Channel, H, W) 차원 추가
         mask_inputs_orig = mask_inputs_orig.float().to(inference_state["device"])
 
-        # resize the mask if it doesn't match the model's input mask size
+        # 2. 마스크 리사이징 (모델 입력용 256x256)
         if mask_H != self.input_mask_size or mask_W != self.input_mask_size:
             mask_inputs = torch.nn.functional.interpolate(
                 mask_inputs_orig,
                 size=(self.input_mask_size, self.input_mask_size),
                 align_corners=False,
                 mode="bilinear",
-                antialias=True,  # use antialias for downsampling
+                antialias=True, 
             )
         else:
             mask_inputs = mask_inputs_orig
 
-        # also get the mask at the original video resolution (for outputting)
+        # 3. 마스크 리사이징 (원본 비디오 해상도용)
         video_H = inference_state["video_height"]
         video_W = inference_state["video_width"]
         if mask_H != video_H or mask_W != video_W:
@@ -378,71 +424,71 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
                 size=(video_H, video_W),
                 align_corners=False,
                 mode="bilinear",
-                antialias=True,  # use antialias for potential downsampling
+                antialias=True, 
             )
         else:
             mask_inputs_video_res = mask_inputs_orig
-        # convert mask_inputs_video_res to binary (threshold at 0.5 as it is in range 0~1)
+            
+        # 이진화 (0.5 기준 Thresholding)
         mask_inputs_video_res = mask_inputs_video_res > 0.5
 
+        # 입력 저장
         mask_inputs_per_frame[frame_idx] = mask_inputs_video_res
-        point_inputs_per_frame.pop(frame_idx, None)
-        # If this frame hasn't been tracked before, we treat it as an initial conditioning
-        # frame, meaning that the inputs points are to generate segments on this frame without
-        # using any memory from other frames, like in SAM. Otherwise (if it has been tracked),
-        # the input points will be used to correct the already tracked masks.
+        point_inputs_per_frame.pop(frame_idx, None) # 마스크가 들어오면 포인트 입력 삭제
+
+        # 4. 추론 방향 및 조건 설정
         is_init_cond_frame = frame_idx not in inference_state["frames_already_tracked"]
-        # whether to track in reverse time order
         if is_init_cond_frame:
             reverse = False
         else:
             reverse = inference_state["frames_already_tracked"][frame_idx]["reverse"]
+            
         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
         obj_temp_output_dict = inference_state["temp_output_dict_per_obj"][obj_idx]
-        # Add a frame to conditioning output if it's an initial conditioning frame or
-        # if the model sees all frames receiving clicks/mask as conditioning frames.
+
         is_cond = is_init_cond_frame or self.add_all_frames_to_correct_as_cond
         storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"
 
+        # 5. 추론 실행
         current_out, _ = self._run_single_frame_inference(
             inference_state=inference_state,
-            output_dict=obj_output_dict,  # run on the slice of a single object
+            output_dict=obj_output_dict, 
             frame_idx=frame_idx,
-            batch_size=1,  # run on the slice of a single object
+            batch_size=1, 
             is_init_cond_frame=is_init_cond_frame,
             point_inputs=None,
-            mask_inputs=mask_inputs,
+            mask_inputs=mask_inputs, # 포인트 대신 마스크 전달
             reverse=reverse,
-            # Skip the memory encoder when adding clicks or mask. We execute the memory encoder
-            # at the beginning of `propagate_in_video` (after user finalize their clicks). This
-            # allows us to enforce non-overlapping constraints on all objects before encoding
-            # them into memory.
             run_mem_encoder=False,
         )
-        # We directly use the input mask at video resolution as the output mask for a better
-        # video editing experience (so that the masks don't change after each brushing).
-        # Here NO_OBJ_SCORE is a large negative value to represent the background and
-        # similarly -NO_OBJ_SCORE is a large positive value to represent the foreground.
+        
+        # 6. [중요] 사용자가 그린 마스크를 그대로 출력으로 사용
+        # SAM이 예측한 것보다 사용자가 직접 칠한 것을 우선시합니다 (편집 경험 향상).
+        # NO_OBJ_SCORE는 배경(-), -NO_OBJ_SCORE는 전경(+)을 의미
         current_out["pred_masks"] = None
         current_out["pred_masks_video_res"] = torch.where(
             mask_inputs_video_res, -NO_OBJ_SCORE, NO_OBJ_SCORE
         )
-        # Add the output to the output dict (to be used as future memory)
+        
+        # 결과 임시 저장
         obj_temp_output_dict[storage_key][frame_idx] = current_out
-        # Remove the overlapping proportion of other objects' input masks on this frame
+        
+        # 7. 다른 객체에서 겹치는 부분 제거 (Non-overlapping)
+        # "내가 칠한 부분은 내 땅이니까 다른 객체들은 여기서 비켜"
         temp_output_dict_per_obj = inference_state["temp_output_dict_per_obj"]
         for obj_idx2, obj_temp_output_dict2 in temp_output_dict_per_obj.items():
             if obj_idx2 == obj_idx:
                 continue
             current_out2 = obj_temp_output_dict2[storage_key].get(frame_idx, None)
             if current_out2 is not None and "pred_masks_video_res" in current_out2:
+                # 겹치는 부분을 배경(NO_OBJ_SCORE)으로 덮어씀
                 current_out2["pred_masks_video_res"] = torch.where(
                     mask_inputs_video_res,
                     NO_OBJ_SCORE,
                     current_out2["pred_masks_video_res"],
                 )
 
-        # Resize the output mask to the original video resolution
+        # 8. 최종 병합 및 반환
         obj_ids = inference_state["obj_ids"]
         consolidated_out = self._consolidate_temp_output_across_obj(
             inference_state,
@@ -454,11 +500,11 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
         _, video_res_masks = self._get_orig_video_res_output(
             inference_state, consolidated_out["pred_masks_video_res"]
         )
-        low_res_masks = None  # not needed by the demo
+        low_res_masks = None 
         return frame_idx, obj_ids, low_res_masks, video_res_masks
 
     def add_new_points(self, *args, **kwargs):
-        """Deprecated method. Please use `add_new_points_or_box` instead."""
+        """[Deprecated] add_new_points_or_box를 대신 사용하세요."""
         return self.add_new_points_or_box(*args, **kwargs)
 
     def _get_orig_video_res_output(self, inference_state, any_res_masks):
@@ -672,30 +718,38 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
 
     @torch.inference_mode()
     def propagate_in_video_preflight(self, inference_state, run_mem_encoder=True):
-        """Prepare inference_state and consolidate temporary outputs before tracking."""
-        # Tracking has started and we don't allow adding new objects until session is reset.
+        """
+        추적(tracking)을 시작하기 전에 inference_state를 준비하고 임시 출력들을 통합(consolidate)합니다.
+        """
+        # 추적이 시작되었음을 표시합니다. 세션이 리셋되기 전까지는 새로운 객체 추가가 허용되지 않습니다.
         inference_state["tracking_has_started"] = True
         batch_size = self._get_obj_num(inference_state)
 
-        # Consolidate per-object temporary outputs in "temp_output_dict_per_obj" and
-        # add them into "output_dict".
+        # 각 객체별로 흩어져 있는 임시 출력("temp_output_dict_per_obj")을 통합하여
+        # 메인 출력 저장소인 "output_dict"에 추가합니다.
         temp_output_dict_per_obj = inference_state["temp_output_dict_per_obj"]
         output_dict = inference_state["output_dict"]
-        # "consolidated_frame_inds" contains indices of those frames where consolidated
-        # temporary outputs have been added (either in this call or any previous calls
-        # to `propagate_in_video_preflight`).
+        
+        # "consolidated_frame_inds"는 통합된 임시 출력이 추가된 프레임들의 인덱스를 저장합니다.
+        # (이번 호출 또는 이전의 `propagate_in_video_preflight` 호출에서 추가된 것들)
         consolidated_frame_inds = inference_state["consolidated_frame_inds"]
+        
+        # 조건부 출력(is_cond=True, 사용자 입력 기반)과 비조건부 출력(is_cond=False, 모델 추론 기반)을 분리하여 처리
         for is_cond in [False, True]:
-            # Separately consolidate conditioning and non-conditioning temp outptus
+            # 저장소 키 설정 ("cond_frame_outputs" 또는 "non_cond_frame_outputs")
             storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"
-            # Find all the frames that contain temporary outputs for any objects
-            # (these should be the frames that have just received clicks for mask inputs
-            # via `add_new_points` or `add_new_mask`)
+            
+            # 임시 출력을 가지고 있는 모든 프레임 인덱스를 찾습니다.
+            # (이들은 `add_new_points`나 `add_new_mask`를 통해 방금 클릭이나 마스크 입력을 받은 프레임들입니다.)
             temp_frame_inds = set()
             for obj_temp_output_dict in temp_output_dict_per_obj.values():
                 temp_frame_inds.update(obj_temp_output_dict[storage_key].keys())
+            
+            # 통합된 프레임 인덱스 목록 업데이트
             consolidated_frame_inds[storage_key].update(temp_frame_inds)
-            # consolidate the temprary output across all objects on this frame
+            
+            # 해당 프레임에 있는 모든 객체의 임시 출력을 하나로 통합(consolidate)합니다.
+            # [중요] 여기서 run_mem_encoder=True이면 메모리 인코딩(기억 저장)이 수행됩니다.
             for frame_idx in temp_frame_inds:
                 consolidated_out = self._consolidate_temp_output_across_obj(
                     inference_state,
@@ -703,35 +757,43 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
                     is_cond=is_cond,
                     run_mem_encoder=run_mem_encoder,
                 )
-                # merge them into "output_dict" and also create per-object slices
+                # 통합된 결과를 메인 "output_dict"에 병합하고, 객체별 슬라이스(뷰)도 생성합니다.
                 output_dict[storage_key][frame_idx] = consolidated_out
                 self._add_output_per_object(
                     inference_state, frame_idx, consolidated_out, storage_key
                 )
+                
+                # 다중 객체 상황이거나 배치 크기가 1 이하일 때, 입력 프레임 주변의 비조건부 메모리를 정리할지 결정
+                # (새로운 입력이 들어왔으므로 주변의 오래된 추론 결과는 지워주는 것이 좋을 수 있음)
                 clear_non_cond_mem = self.clear_non_cond_mem_around_input and (
                     self.clear_non_cond_mem_for_multi_obj or batch_size <= 1
                 )
                 if clear_non_cond_mem:
-                    # clear non-conditioning memory of the surrounding frames
+                    # 입력 주변 프레임의 비조건부 메모리(이전 추론 결과)를 삭제합니다.
                     self._clear_non_cond_mem_around_input(inference_state, frame_idx)
 
-            # clear temporary outputs in `temp_output_dict_per_obj`
+            # 처리가 끝났으므로 `temp_output_dict_per_obj`의 임시 출력을 비웁니다.
             for obj_temp_output_dict in temp_output_dict_per_obj.values():
                 obj_temp_output_dict[storage_key].clear()
 
-        # edge case: if an output is added to "cond_frame_outputs", we remove any prior
-        # output on the same frame in "non_cond_frame_outputs"
+        # 예외 처리(Edge case): 만약 어떤 프레임에 "cond_frame_outputs"(사용자 입력 결과)가 추가되었다면,
+        # 동일한 프레임에 있던 기존의 "non_cond_frame_outputs"(이전 추론 결과)는 삭제해야 합니다.
+        # (사용자가 직접 수정한 내용이 모델이 추측한 내용보다 우선하기 때문)
         for frame_idx in output_dict["cond_frame_outputs"]:
             output_dict["non_cond_frame_outputs"].pop(frame_idx, None)
+        
+        # 객체별 딕셔너리에서도 동일하게 삭제
         for obj_output_dict in inference_state["output_dict_per_obj"].values():
             for frame_idx in obj_output_dict["cond_frame_outputs"]:
                 obj_output_dict["non_cond_frame_outputs"].pop(frame_idx, None)
+        
+        # 인덱스 집합에서도 삭제
         for frame_idx in consolidated_frame_inds["cond_frame_outputs"]:
             assert frame_idx in output_dict["cond_frame_outputs"]
             consolidated_frame_inds["non_cond_frame_outputs"].discard(frame_idx)
 
-        # Make sure that the frame indices in "consolidated_frame_inds" are exactly those frames
-        # with either points or mask inputs (which should be true under a correct demo workflow).
+        # "consolidated_frame_inds"에 있는 프레임들이 실제로 포인트나 마스크 입력이 있는 프레임들과
+        # 정확히 일치하는지 확인합니다. (올바른 데모 워크플로우라면 일치해야 함)
         all_consolidated_frame_inds = (
             consolidated_frame_inds["cond_frame_outputs"]
             | consolidated_frame_inds["non_cond_frame_outputs"]
@@ -741,14 +803,17 @@ class Sam3TrackerPredictor(Sam3TrackerBase):
             input_frames_inds.update(point_inputs_per_frame.keys())
         for mask_inputs_per_frame in inference_state["mask_inputs_per_obj"].values():
             input_frames_inds.update(mask_inputs_per_frame.keys())
+        
         assert all_consolidated_frame_inds == input_frames_inds
-        # Record the first interacted frame index (for tracking start)
+        
+        # 첫 번째 상호작용(어노테이션)이 발생한 프레임 인덱스를 기록합니다. (추적 시작 지점으로 사용됨)
         if inference_state["first_ann_frame_idx"] is None:
             inference_state["first_ann_frame_idx"] = min(
                 input_frames_inds, default=None
             )
-        # In case `first_ann_frame_idx` is not in the conditioning frames (e.g. because
-        # we cleared the input points on that frame), pick the first conditioning frame
+            
+        # 만약 `first_ann_frame_idx`가 현재 조건부 프레임 목록에 없다면 (예: 해당 프레임의 입력을 지운 경우),
+        # 남아있는 조건부 프레임 중 가장 빠른 것을 선택합니다.
         if (
             inference_state["first_ann_frame_idx"]
             not in output_dict["cond_frame_outputs"]
