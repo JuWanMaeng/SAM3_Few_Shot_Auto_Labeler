@@ -1,9 +1,3 @@
-import matplotlib
-try:
-    matplotlib.use('TkAgg') 
-except:
-    pass
-
 import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
 import matplotlib.patches as patches
@@ -38,7 +32,7 @@ os.makedirs(OVERLAY_OUTPUT_DIR, exist_ok=True)
 os.makedirs(BBOX_OUTPUT_DIR, exist_ok=True)
 
 # [사용자 데이터 경로]
-defect = 'pcb'
+defect = 'particles'
 REF_DIR = f"C:/data/Sam3/{defect}/ref"
 TARGET_FOLDER = f"C:/data/Sam3/{defect}/target"
 
@@ -46,7 +40,7 @@ TARGET_FOLDER = f"C:/data/Sam3/{defect}/target"
 REF_IMAGES = sorted(
     glob.glob(os.path.join(REF_DIR, "*.png")) + 
     glob.glob(os.path.join(REF_DIR, "*.jpg")) + 
-    glob.glob(os.path.join(REF_DIR, "*.bmp"))
+    glob.glob(os.path.join(REF_DIR, "*.bmp")) 
 )
 print(f">> Found {len(REF_IMAGES)} reference images.")
 
@@ -296,7 +290,11 @@ class InteractiveBatchLabeler:
         pixel_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
 
         with torch.inference_mode():
+            total_time = 0
+            cnt = 0
             for t_idx, t_path in enumerate(target_files):
+                start_time = time.time()
+
                 filename = os.path.basename(t_path)
                 base_name = os.path.splitext(filename)[0]
                 print(f"  [{t_idx+1}/{len(target_files)}] Processing: {filename}", end="\r")
@@ -319,7 +317,8 @@ class InteractiveBatchLabeler:
 
                     # Inference
                     combined_mask = None
-                    
+
+                
                     for oid in tracked_ids:
                         obj_idx = self.predictor._obj_id_to_idx(inference_state, oid)
                         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
@@ -335,6 +334,7 @@ class InteractiveBatchLabeler:
                             reverse=False,
                             run_mem_encoder=False, 
                         )
+            
                         
                         pred_mask = current_out["pred_masks"]
                         if pred_mask is not None:
@@ -346,6 +346,9 @@ class InteractiveBatchLabeler:
                         if dummy_idx in obj_output_dict["non_cond_frame_outputs"]:
                             del obj_output_dict["non_cond_frame_outputs"][dummy_idx]
 
+                    total_time += (time.time() - start_time)
+                    cnt += 1
+                    
                     if combined_mask is not None:
                         if combined_mask.ndim == 3: combined_mask = combined_mask.squeeze()
                         
@@ -370,6 +373,7 @@ class InteractiveBatchLabeler:
                     torch.cuda.empty_cache()
                 
         print("\n\nAll Done.")
+        print(total_time / max(1, cnt))
 
     def create_mask_overlay(self, original_img_pil, mask_np, color=(255, 0, 0), alpha=0.5):
         img_np = np.array(original_img_pil)

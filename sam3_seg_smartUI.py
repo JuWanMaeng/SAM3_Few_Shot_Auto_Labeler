@@ -1,9 +1,3 @@
-import matplotlib
-try:
-    matplotlib.use('TkAgg') 
-except:
-    pass
-
 import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
 import matplotlib.patches as patches
@@ -41,7 +35,7 @@ os.makedirs(BBOX_OUTPUT_DIR, exist_ok=True)
 os.makedirs(ID_MASK_OUTPUT_DIR, exist_ok=True)
 
 # [사용자 데이터 경로]
-defect = 'particles'
+defect = 'crack'
 REF_DIR = f"C:/data/Sam3/{defect}/ref"
 TARGET_FOLDER = f"C:/data/Sam3/{defect}/target"
 
@@ -71,7 +65,7 @@ class SmartBoxSelector:
         self.global_thumbnails = global_thumbnails 
         self.global_counts = global_counts 
         
-        self.fig = plt.figure(figsize=(15, 10)) 
+        self.fig = plt.figure(figsize=(10, 8)) 
         gs = gridspec.GridSpec(5, 2, width_ratios=[3, 1], figure=self.fig)
         
         # 메인 화면
@@ -202,6 +196,17 @@ class InteractiveBatchLabeler:
         self.predictor.backbone = self.sam3_model.detector.backbone
         print("Model Loaded.")
 
+        # =================================================================
+        # [🔥 핵심 수정] 참조 프레임 제한 해제 (Limit Break)
+        # 기본값 4 -> -1 (무제한)으로 변경하여 모든 Reference를 강제로 보게 함
+        # 매우중요 select_closest_cond_frames 함수에서 참조 프레임 선택 로직이 비활성화됨
+        # =================================================================
+        print(f"[System] Default Max Cond Frames: {self.predictor.max_cond_frames_in_attn}")
+        
+        self.predictor.max_cond_frames_in_attn = -1 
+        
+        print(f"[System] Updated Max Cond Frames: {self.predictor.max_cond_frames_in_attn} (Unlimited)")
+
         self.ref_frames = []
         self.ref_prompts = []
         
@@ -251,7 +256,7 @@ class InteractiveBatchLabeler:
 
     def run(self):
         if not self.prepare_references(): return
-        target_files = sorted(glob.glob(os.path.join(TARGET_FOLDER, "*.jpg")) + glob.glob(os.path.join(TARGET_FOLDER, "*.png")))
+        target_files = sorted(glob.glob(os.path.join(TARGET_FOLDER, "*.jpg")) + glob.glob(os.path.join(TARGET_FOLDER, "*.png")) + glob.glob(os.path.join(TARGET_FOLDER, "*.bmp")))
         print(f"\n--- Step 2: Processing {len(target_files)} images ---")
         self.run_fast_inference(target_files)
 
@@ -275,8 +280,8 @@ class InteractiveBatchLabeler:
         
         # 2. Reference 학습
         print("  -> Encoding References...")
+
         tracked_ids = []
-        
         for frame_idx, prompts in enumerate(self.ref_prompts):
             for item in prompts:
                 obj_id = item['id']
@@ -290,7 +295,9 @@ class InteractiveBatchLabeler:
                 )
                 if obj_id not in tracked_ids:
                     tracked_ids.append(obj_id)
-                
+
+
+
         for _ in self.predictor.propagate_in_video(
             inference_state, 
             start_frame_idx=0, 
@@ -306,7 +313,11 @@ class InteractiveBatchLabeler:
         pixel_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
 
         with torch.inference_mode():
+            total_time = 0
+            cnt = 0
             for t_idx, t_path in enumerate(target_files):
+                start_time = time.time()
+
                 filename = os.path.basename(t_path)
                 base_name = os.path.splitext(filename)[0]
                 print(f"  [{t_idx+1}/{len(target_files)}] Processing: {filename}", end="\r")
@@ -329,7 +340,10 @@ class InteractiveBatchLabeler:
                     detected_objects = [] 
                     combined_mask = None
                     
+                    
                     for oid in tracked_ids:
+                        if oid >=4:
+                            continue
                         obj_idx = self.predictor._obj_id_to_idx(inference_state, oid)
                         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
                         
@@ -344,6 +358,7 @@ class InteractiveBatchLabeler:
                             reverse=False,
                             run_mem_encoder=False, 
                         )
+            
                         
                         pred_masks = current_out["pred_masks"]
                         obj_score = current_out["object_score_logits"]
@@ -366,6 +381,9 @@ class InteractiveBatchLabeler:
                         
                         if dummy_idx in obj_output_dict["non_cond_frame_outputs"]:
                             del obj_output_dict["non_cond_frame_outputs"][dummy_idx]
+
+                    total_time += (time.time() - start_time)
+                    cnt += 1
 
                     if detected_objects:
                         if combined_mask.ndim == 3: combined_mask = combined_mask.squeeze()
@@ -390,11 +408,12 @@ class InteractiveBatchLabeler:
                     import traceback
                     traceback.print_exc()
                 
-                if (t_idx + 1) % 50 == 0:
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                # if (t_idx + 1) % 50 == 0:
+                #     gc.collect()
+                #     torch.cuda.empty_cache()
                 
         print("\n\nAll Done.")
+        print(total_time / max(1, cnt))
 
     def create_overlay_with_id(self, original_img_pil, detected_objects, dsize):
         img_np = np.array(original_img_pil)
@@ -447,6 +466,4 @@ if __name__ == "__main__":
         return original_track_step(*args, **kwargs)
     app.predictor.track_step = patched_track_step
     
-    start_time = time.time()
     app.run()
-    print(f"Total Time: {time.time() - start_time:.2f}s")

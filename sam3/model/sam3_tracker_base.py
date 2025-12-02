@@ -566,30 +566,41 @@ class Sam3TrackerBase(torch.nn.Module):
         feat_sizes,
         output_dict,
         num_frames,
-        track_in_reverse=False,  # tracking in reverse time order (for demo usage)
+        track_in_reverse=False,  # 시간 역순 추적 여부 (데모용)
         use_prev_mem_frame=True,
     ):
-        """Fuse the current frame's visual feature map with previous memory."""
-        B = current_vision_feats[-1].size(1)  # batch size on this frame
+        """
+        현재 프레임의 시각적 특징 맵(visual feature map)을 이전 메모리와 융합합니다.
+        """
+        # 현재 프레임의 배치 크기, 채널 수, 높이, 너비 가져오기
+        B = current_vision_feats[-1].size(1)
         C = self.hidden_dim
-        H, W = feat_sizes[-1]  # top-level (lowest-resolution) feature size
+        H, W = feat_sizes[-1]  # 최상위(가장 낮은 해상도) 특징 맵 크기
         device = current_vision_feats[-1].device
-        # The case of `self.num_maskmem == 0` below is primarily used for reproducing SAM on images.
-        # In this case, we skip the fusion with any memory.
-        if self.num_maskmem == 0:  # Disable memory and skip fusion
+
+        # 메모리 기능이 꺼져있는 경우 (`self.num_maskmem == 0`)
+        # (주로 정지 이미지에서 SAM을 재현할 때 사용됨)
+        if self.num_maskmem == 0:  
+            # 융합 없이 현재 특징만 차원 변경(Permute) 및 형태 변환(Reshape)하여 반환
             pix_feat = current_vision_feats[-1].permute(1, 2, 0).view(B, C, H, W)
             return pix_feat
 
         num_obj_ptr_tokens = 0
-        tpos_sign_mul = -1 if track_in_reverse else 1
-        # Step 1: condition the visual features of the current frame on previous memories
+        tpos_sign_mul = -1 if track_in_reverse else 1 # 역방향 추적 시 시간 부호 반전
+
+        # ------------------------------------------------------------------
+        # Step 1: 현재 프레임의 시각적 특징에 이전 메모리들을 조건부로 적용(Conditioning)
+        # ------------------------------------------------------------------
+        
+        # 초기 프레임(첫 입력)이 아니고, 이전 메모리를 사용하도록 설정된 경우
         if not is_init_cond_frame and use_prev_mem_frame:
-            # Retrieve the memories encoded with the maskmem backbone
+            # 마스크 메모리 백본으로 인코딩된 기억들을 가져올 준비
             to_cat_prompt, to_cat_prompt_mask, to_cat_prompt_pos_embed = [], [], []
-            # Add conditioning frames's output first (all cond frames have t_pos=0 for
-            # when getting temporal positional embedding below)
+
+            # 1. 조건부 프레임(사용자 입력이 있는 프레임) 출력 추가
             assert len(output_dict["cond_frame_outputs"]) > 0
-            # Select a maximum number of temporally closest cond frames for cross attention
+            
+            # Cross-attention을 위해 시간적으로 가장 가까운 조건부 프레임들을 선택
             cond_outputs = output_dict["cond_frame_outputs"]
             selected_cond_outputs, unselected_cond_outputs = select_closest_cond_frames(
                 frame_idx,
@@ -597,94 +608,98 @@ class Sam3TrackerBase(torch.nn.Module):
                 self.max_cond_frames_in_attn,
                 keep_first_cond_frame=self.keep_first_cond_frame,
             )
+            
+            # 선택된 프레임들의 시간 거리(t_pos)와 데이터 준비 (True는 조건부 프레임임을 의미)
             t_pos_and_prevs = [
                 ((frame_idx - t) * tpos_sign_mul, out, True)
                 for t, out in selected_cond_outputs.items()
             ]
-            # Add last (self.num_maskmem - 1) frames before current frame for non-conditioning memory
-            # the earliest one has t_pos=1 and the latest one has t_pos=self.num_maskmem-1
-            # We also allow taking the memory frame non-consecutively (with r>1), in which case
-            # we take (self.num_maskmem - 2) frames among every r-th frames plus the last frame.
+
+            # 2. 비조건부 메모리(과거 추론 결과) 추가
+            # (현재 프레임 이전의 최근 프레임들을 가져옴)
             r = 1 if self.training else self.memory_temporal_stride_for_eval
 
+            # 메모리 선택(Filtering) 기능 사용 시 유효한 프레임 인덱스 선별
             if self.use_memory_selection:
                 valid_indices = self.frame_filter(
                     output_dict, track_in_reverse, frame_idx, num_frames, r
                 )
 
+            # 최근 n개(num_maskmem)의 과거 시점을 순회하며 메모리 수집
             for t_pos in range(1, self.num_maskmem):
-                t_rel = self.num_maskmem - t_pos  # how many frames before current frame
+                t_rel = self.num_maskmem - t_pos  # 현재 프레임보다 얼마나 전인지 계산
+                
+                # 메모리 선택 로직에 따라 가져올 프레임 인덱스(prev_frame_idx) 결정
                 if self.use_memory_selection:
                     if t_rel > len(valid_indices):
                         continue
                     prev_frame_idx = valid_indices[-t_rel]
                 else:
+                    # (기본 로직) 바로 직전 프레임 또는 stride(r) 간격으로 프레임 선택
                     if t_rel == 1:
-                        # for t_rel == 1, we take the last frame (regardless of r)
                         if not track_in_reverse:
-                            # the frame immediately before this frame (i.e. frame_idx - 1)
                             prev_frame_idx = frame_idx - t_rel
                         else:
-                            # the frame immediately after this frame (i.e. frame_idx + 1)
                             prev_frame_idx = frame_idx + t_rel
                     else:
-                        # for t_rel >= 2, we take the memory frame from every r-th frames
+                        # r > 1 일 때 띄엄띄엄 가져오는 로직
                         if not track_in_reverse:
-                            # first find the nearest frame among every r-th frames before this frame
-                            # for r=1, this would be (frame_idx - 2)
                             prev_frame_idx = ((frame_idx - 2) // r) * r
-                            # then seek further among every r-th frames
                             prev_frame_idx = prev_frame_idx - (t_rel - 2) * r
                         else:
-                            # first find the nearest frame among every r-th frames after this frame
-                            # for r=1, this would be (frame_idx + 2)
                             prev_frame_idx = -(-(frame_idx + 2) // r) * r
-                            # then seek further among every r-th frames
                             prev_frame_idx = prev_frame_idx + (t_rel - 2) * r
 
+                # 해당 인덱스의 출력을 가져옴
                 out = output_dict["non_cond_frame_outputs"].get(prev_frame_idx, None)
                 if out is None:
-                    # If an unselected conditioning frame is among the last (self.num_maskmem - 1)
-                    # frames, we still attend to it as if it's a non-conditioning frame.
+                    # 만약 선택되지 않은 조건부 프레임이 이 위치에 있다면 대신 사용
                     out = unselected_cond_outputs.get(prev_frame_idx, None)
+                
+                # 리스트에 추가 (False는 비조건부 프레임임을 의미)
                 t_pos_and_prevs.append((t_pos, out, False))
 
+            # 수집된 모든 과거 프레임(조건부 + 비조건부)을 순회하며 프롬프트 생성
             for t_pos, prev, is_selected_cond_frame in t_pos_and_prevs:
                 if prev is None:
-                    continue  # skip padding frames
-                # "maskmem_features" might have been offloaded to CPU in demo use cases,
-                # so we load it back to GPU (it's a no-op if it's already on GPU).
+                    continue  # 패딩 프레임이면 스킵
+
+                # 3. 시각적 메모리 특징(Spatial Memory) 준비
+                # CPU에 있던 메모리를 GPU로 로드
                 feats = prev["maskmem_features"].cuda(non_blocking=True)
                 seq_len = feats.shape[-2] * feats.shape[-1]
+                # (B, C, H, W) -> (HW, B, C) 형태로 변환하여 리스트에 추가
                 to_cat_prompt.append(feats.flatten(2).permute(2, 0, 1))
                 to_cat_prompt_mask.append(
                     torch.zeros(B, seq_len, device=device, dtype=bool)
                 )
-                # Spatial positional encoding (it might have been offloaded to CPU in eval)
+
+                # 4. 공간적 위치 인코딩(Spatial Positional Encoding) 준비
                 maskmem_enc = prev["maskmem_pos_enc"][-1].cuda()
                 maskmem_enc = maskmem_enc.flatten(2).permute(2, 0, 1)
 
+                # 조건부 프레임인 경우 별도의 임베딩 추가 (User Input임을 표시)
                 if (
                     is_selected_cond_frame
                     and getattr(self, "cond_frame_spatial_embedding", None) is not None
                 ):
-                    # add a spatial embedding for the conditioning frame
                     maskmem_enc = maskmem_enc + self.cond_frame_spatial_embedding
 
-                # Temporal positional encoding
+                # 5. 시간적 위치 인코딩(Temporal Positional Encoding) 추가
+                # "이 기억은 t만큼 오래된 것이다"라는 정보를 더함
                 t = t_pos if not is_selected_cond_frame else 0
                 maskmem_enc = (
                     maskmem_enc + self.maskmem_tpos_enc[self.num_maskmem - t - 1]
                 )
                 to_cat_prompt_pos_embed.append(maskmem_enc)
 
-            # Construct the list of past object pointers
-            # Optionally, select only a subset of spatial memory frames during trainining
+            # (선택적) 학습 중 메모리 드롭아웃 (과적합 방지용)
             if (
                 self.training
                 and self.prob_to_dropout_spatial_mem > 0
                 and self.rng.random() < self.prob_to_dropout_spatial_mem
             ):
+                # 랜덤하게 일부 메모리를 버림
                 num_spatial_mem_keep = self.rng.integers(len(to_cat_prompt) + 1)
                 keep = self.rng.choice(
                     range(len(to_cat_prompt)), num_spatial_mem_keep, replace=False
@@ -693,9 +708,11 @@ class Sam3TrackerBase(torch.nn.Module):
                 to_cat_prompt_mask = [to_cat_prompt_mask[i] for i in keep]
                 to_cat_prompt_pos_embed = [to_cat_prompt_pos_embed[i] for i in keep]
 
+            # 6. 객체 포인터(Object Pointers) 추가
+            # (이미지 전체 특징 외에 객체 자체를 나타내는 고수준 벡터)
             max_obj_ptrs_in_encoder = min(num_frames, self.max_obj_ptrs_in_encoder)
-            # First add those object pointers from selected conditioning frames
-            # (optionally, only include object pointers in the past during evaluation)
+            
+            # 평가 시에는 과거의 포인터만, 학습 시에는 전체 포인터 사용
             if not self.training:
                 ptr_cond_outputs = {
                     t: out
@@ -704,18 +721,19 @@ class Sam3TrackerBase(torch.nn.Module):
                 }
             else:
                 ptr_cond_outputs = selected_cond_outputs
+
             pos_and_ptrs = [
-                # Temporal pos encoding contains how far away each pointer is from current frame
                 (
-                    (frame_idx - t) * tpos_sign_mul,
-                    out["obj_ptr"],
-                    True,  # is_selected_cond_frame
+                    (frame_idx - t) * tpos_sign_mul, # 시간 차이
+                    out["obj_ptr"],                  # 객체 포인터
+                    True,                            # 조건부 프레임 여부
                 )
                 for t, out in ptr_cond_outputs.items()
             ]
 
-            # Add up to (max_obj_ptrs_in_encoder - 1) non-conditioning frames before current frame
+            # 비조건부 프레임의 객체 포인터도 수집
             for t_diff in range(1, max_obj_ptrs_in_encoder):
+                # ... (프레임 인덱스 계산 및 유효성 검사 로직, 위와 유사) ...
                 if not self.use_memory_selection:
                     t = frame_idx + t_diff if track_in_reverse else frame_idx - t_diff
                     if t < 0 or (num_frames is not None and t >= num_frames):
@@ -731,11 +749,12 @@ class Sam3TrackerBase(torch.nn.Module):
                 if out is not None:
                     pos_and_ptrs.append((t_diff, out["obj_ptr"], False))
 
-            # If we have at least one object pointer, add them to the across attention
+            # 객체 포인터가 하나라도 있으면 처리
             if len(pos_and_ptrs) > 0:
                 pos_list, ptrs_list, is_selected_cond_frame_list = zip(*pos_and_ptrs)
-                # stack object pointers along dim=0 into [ptr_seq_len, B, C] shape
                 obj_ptrs = torch.stack(ptrs_list, dim=0)
+                
+                # 조건부 프레임 포인터에 임베딩 추가
                 if getattr(self, "cond_frame_obj_ptr_embedding", None) is not None:
                     obj_ptrs = (
                         obj_ptrs
@@ -744,42 +763,50 @@ class Sam3TrackerBase(torch.nn.Module):
                             ..., None, None
                         ].float()
                     )
-                # a temporal positional embedding based on how far each object pointer is from
-                # the current frame (sine embedding normalized by the max pointer num).
+                
+                # 객체 포인터에 대한 시간 위치 인코딩 생성 (Sine embedding)
                 obj_pos = self._get_tpos_enc(
                     pos_list,
                     max_abs_pos=max_obj_ptrs_in_encoder,
                     device=device,
                 )
-                # expand to batch size
                 obj_pos = obj_pos.unsqueeze(1).expand(-1, B, -1)
 
+                # 메모리 차원 맞추기 (필요시 쪼개거나 합침)
                 if self.mem_dim < C:
-                    # split a pointer into (C // self.mem_dim) tokens for self.mem_dim < C
                     obj_ptrs = obj_ptrs.reshape(-1, B, C // self.mem_dim, self.mem_dim)
                     obj_ptrs = obj_ptrs.permute(0, 2, 1, 3).flatten(0, 1)
                     obj_pos = obj_pos.repeat_interleave(C // self.mem_dim, dim=0)
+                
+                # 최종 프롬프트 리스트에 추가
                 to_cat_prompt.append(obj_ptrs)
-                to_cat_prompt_mask.append(None)  # "to_cat_prompt_mask" is not used
+                to_cat_prompt_mask.append(None)
                 to_cat_prompt_pos_embed.append(obj_pos)
                 num_obj_ptr_tokens = obj_ptrs.shape[0]
             else:
                 num_obj_ptr_tokens = 0
         else:
-            # directly add no-mem embedding (instead of using the transformer encoder)
+            # 초기 프레임(첫 입력)인 경우: 메모리를 융합할 필요가 없음
+            # "기억 없음" 임베딩(no_mem_embed)만 더해서 바로 리턴 (빠른 경로)
             pix_feat_with_mem = current_vision_feats[-1] + self.no_mem_embed
             pix_feat_with_mem = pix_feat_with_mem.permute(1, 2, 0).view(B, C, H, W)
             return pix_feat_with_mem
-
-            # Use a dummy token on the first grame (to avoid emtpy memory input to tranformer encoder)
+            
+            # (참고: 아래 코드는 실행되지 않는 Dead Code로 보임, 들여쓰기 문제 가능성 있음)
+            # Transformer Encoder에 빈 메모리를 넣지 않기 위해 더미 토큰 사용
             to_cat_prompt = [self.no_mem_embed.expand(1, B, self.mem_dim)]
             to_cat_prompt_mask = [torch.zeros(B, 1, device=device, dtype=bool)]
             to_cat_prompt_pos_embed = [self.no_mem_pos_enc.expand(1, B, self.mem_dim)]
 
-        # Step 2: Concatenate the memories and forward through the transformer encoder
+        # ------------------------------------------------------------------
+        # Step 2: 메모리들을 연결(Concat)하고 Transformer Encoder 통과
+        # ------------------------------------------------------------------
+        # 
         prompt = torch.cat(to_cat_prompt, dim=0)
-        prompt_mask = None  # For now, we always masks are zeros anyways
+        prompt_mask = None 
         prompt_pos_embed = torch.cat(to_cat_prompt_pos_embed, dim=0)
+        
+        # Transformer 실행: [현재 이미지 특징] + [과거 메모리 프롬프트] -> [융합된 특징]
         encoder_out = self.transformer.encoder(
             src=current_vision_feats,
             src_key_padding_mask=[None],
@@ -790,7 +817,8 @@ class Sam3TrackerBase(torch.nn.Module):
             feat_sizes=feat_sizes,
             num_obj_ptr_tokens=num_obj_ptr_tokens,
         )
-        # reshape the output (HW)BC => BCHW
+        
+        # 출력 형태 복원 ((HW)BC => BCHW)
         pix_feat_with_mem = encoder_out["memory"].permute(1, 2, 0).view(B, C, H, W)
         return pix_feat_with_mem
 
