@@ -25,6 +25,13 @@ ID_MASK_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "id_masks")
 OVERLAY_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "overlays")
 BBOX_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "bboxes")
 
+# Reverse 결과물 저장 경로
+REVERSE_MASK_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "reverse_masks")
+REVERSE_BBOX_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "reverse_bboxes")
+# [NEW] Reverse Overlay 저장 경로 추가
+REVERSE_OVERLAY_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "reverse_overlays")
+
+# 출력 디렉토리 초기화
 if os.path.exists(TEMP_DIR): shutil.rmtree(TEMP_DIR)
 if os.path.exists(BASE_OUTPUT_DIR): shutil.rmtree(BASE_OUTPUT_DIR)
 
@@ -34,8 +41,13 @@ os.makedirs(OVERLAY_OUTPUT_DIR, exist_ok=True)
 os.makedirs(BBOX_OUTPUT_DIR, exist_ok=True)
 os.makedirs(ID_MASK_OUTPUT_DIR, exist_ok=True)
 
+os.makedirs(REVERSE_MASK_OUTPUT_DIR, exist_ok=True)
+os.makedirs(REVERSE_BBOX_OUTPUT_DIR, exist_ok=True)
+# [NEW] 디렉토리 생성
+os.makedirs(REVERSE_OVERLAY_OUTPUT_DIR, exist_ok=True)
+
 # [사용자 데이터 경로]
-defect = 'particles'
+defect = 'cells'
 REF_DIR = f"C:/data/Sam3/{defect}/ref"
 TARGET_FOLDER = f"C:/data/Sam3/{defect}/target"
 
@@ -53,7 +65,7 @@ COLORS = np.random.randint(0, 255, (255, 3), dtype=np.uint8)
 MPL_COLORS = plt.cm.tab10(np.linspace(0, 1, 10))
 
 # ==========================================
-# 2. 스마트 대시보드 (썸네일 4x2 배열 + 8개 ID)
+# 2. 스마트 대시보드 (썸네일 4x2 배열 + 8개 ID + 'F'키 전체박스 지원)
 # ==========================================
 class SmartBoxSelector:
     def __init__(self, img_arr, title, global_thumbnails, global_counts):
@@ -95,7 +107,7 @@ class SmartBoxSelector:
         self.ax_main.set_title(
             f"{self.title}\n"
             f"Current ID: {self.current_obj_id} (Press '1'-'8' or 'N')\n"
-            f"[Left Drag]: Draw / [Right Click on Box]: Delete / [Q]: Finish"
+            f"[Left Drag]: Draw / [F]: Full Box / [Right Click on Box]: Delete / [Q]: Finish"
         )
         self.fig.canvas.draw()
 
@@ -195,6 +207,31 @@ class SmartBoxSelector:
             elif event.key in [str(i) for i in range(1, 9)]:
                 self.current_obj_id = int(event.key)
                 self.update_title()
+            
+            # 'f' 키를 누르면 전체 이미지 영역에 박스 추가
+            elif event.key in ['u', 'U']:
+                h, w = self.img.shape[:2]
+                
+                self.global_counts[self.current_obj_id] = self.global_counts.get(self.current_obj_id, 0) + 1
+                print(f"  [ID: {self.current_obj_id}] Full Box Added (Total: {self.global_counts[self.current_obj_id]})")
+
+                color = MPL_COLORS[(self.current_obj_id - 1) % 10]
+                rect = patches.Rectangle((0, 0), w, h, linewidth=2, edgecolor=color, facecolor='none')
+                self.ax_main.add_patch(rect)
+                
+                text_obj = self.ax_main.text(5, 20, f"ID:{self.current_obj_id} (Full)", color=color, fontsize=12, fontweight='bold', backgroundcolor='white')
+
+                current_box = [0, 0, w, h]
+                self.box_data.append({
+                    'box': current_box, 
+                    'id': self.current_obj_id,
+                    'rect': rect,
+                    'text': text_obj
+                })
+
+                self.global_thumbnails[self.current_obj_id] = self.img.copy()
+                self.refresh_sidebar_slot(self.current_obj_id)
+                self.fig.canvas.draw()
 
         self.fig.canvas.mpl_connect('key_press_event', on_key)
         self.fig.canvas.mpl_connect('button_press_event', on_mouse_click)
@@ -231,6 +268,7 @@ class InteractiveBatchLabeler:
 
     def prepare_references(self):
         print("\n--- Step 1: Draw Reference Boxes (Count Tracking) ---")
+        print("Instructions: Left-drag to draw box. Press 'F' for full image box. Right-click box to delete. Press 'Q' when done.")
         
         for i, path in enumerate(REF_IMAGES):
             if not os.path.exists(path): continue
@@ -311,7 +349,8 @@ class InteractiveBatchLabeler:
             inference_state, 
             start_frame_idx=0, 
             max_frame_num_to_track=dummy_idx, 
-            reverse=False, propagate_preflight=True
+            propagate_preflight=True,
+            reverse = False
         ): pass
         
         print(f"  -> References Locked. Tracking IDs: {tracked_ids}")
@@ -348,7 +387,7 @@ class InteractiveBatchLabeler:
                     combined_mask = None
                     
                     for oid in tracked_ids:
-                        if oid >= 9: continue # ID 범위 체크 (1~8)
+                        if oid >= 9: continue 
                         
                         obj_idx = self.predictor._obj_id_to_idx(inference_state, oid)
                         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
@@ -368,11 +407,8 @@ class InteractiveBatchLabeler:
                         pred_masks = current_out["pred_masks"]
                         obj_score = current_out["object_score_logits"]
 
-                        # [변경] Threshold 조정 (0.0으로 설정하면 확률 50% 이상)
-                        # 디버깅을 위해 조금 더 낮게(-2.0) 보고 싶다면 여기서 수정
                         if obj_score < -2: continue 
 
-                        # [NEW] Logit -> Probability 변환
                         prob_score = 1.0 / (1.0 + np.exp(-obj_score.cpu().item()))
 
                         if pred_masks is not None:
@@ -385,7 +421,6 @@ class InteractiveBatchLabeler:
                             mask_bool = (pred_mask > 0.0).cpu().numpy().squeeze()
                             
                             if mask_bool.any():
-                                # [NEW] Score 정보도 함께 저장
                                 detected_objects.append({
                                     'id': oid, 
                                     'mask': mask_bool, 
@@ -400,32 +435,66 @@ class InteractiveBatchLabeler:
                     total_time += (time.time() - start_time)
                     cnt += 1
 
-                    # 1. Mask 저장 (검출 없으면 검은색)
+                    # ---------------------------------------------------------
+                    # [결과 저장 및 시각화 로직]
+                    # ---------------------------------------------------------
+                    
+                    # A. 마스크 생성 (정방향 & 역방향)
                     if combined_mask is not None:
                         if combined_mask.ndim == 3: combined_mask = combined_mask.squeeze()
+                        
+                        # 정방향 마스크 리사이즈
                         final_mask_resized = cv2.resize(
                             combined_mask.astype(np.uint8), 
                             target_orig_size, 
                             interpolation=cv2.INTER_NEAREST
                         )
-                    else:
-                        final_mask_resized = np.zeros((target_orig_size[1], target_orig_size[0]), dtype=np.uint8)
-                    
-                    Image.fromarray((final_mask_resized * 255).astype(np.uint8)).save(os.path.join(MASK_OUTPUT_DIR, base_name + "_mask.png"))
 
-                    # 2. Overlay / ID Mask / BBox 저장
+                        # 역방향 마스크 생성 (반전)
+                        reverse_mask_np = 1 - combined_mask.astype(np.uint8)
+                        
+                        # 역방향 마스크 리사이즈
+                        final_reverse_mask_resized = cv2.resize(
+                            reverse_mask_np, 
+                            target_orig_size, 
+                            interpolation=cv2.INTER_NEAREST
+                        )
+
+                    else:
+                        # 검출된 게 없으면 -> 정방향은 Black / 역방향은 White(전체)
+                        final_mask_resized = np.zeros((target_orig_size[1], target_orig_size[0]), dtype=np.uint8)
+                        final_reverse_mask_resized = np.ones((target_orig_size[1], target_orig_size[0]), dtype=np.uint8)
+                    
+                    # B. 마스크 파일 저장
+                    Image.fromarray((final_mask_resized * 255).astype(np.uint8)).save(os.path.join(MASK_OUTPUT_DIR, base_name + "_mask.png"))
+                    Image.fromarray((final_reverse_mask_resized * 255).astype(np.uint8)).save(os.path.join(REVERSE_MASK_OUTPUT_DIR, base_name + "_rev_mask.png"))
+
+                    # C. 시각화 생성 및 저장
                     if detected_objects:
                         vis_id = self.create_overlay_with_id(img_pil, detected_objects, target_orig_size)
-                        vis_overlay = self.create_mask_overlay(img_pil, final_mask_resized)
-                        vis_bbox = self.create_bbox_overlay(img_pil, final_mask_resized)
+                        # 정방향 오버레이 (빨간색, 기본값)
+                        vis_overlay = self.create_mask_overlay(img_pil, final_mask_resized, color=(255, 0, 0))
+                        # 정방향 BBox (초록색)
+                        vis_bbox = self.create_bbox_overlay(img_pil, final_mask_resized, color=(0, 255, 0))
                     else:
                         vis_id = img_pil
                         vis_overlay = img_pil
                         vis_bbox = img_pil
+                    
+                    # [NEW] 역방향 오버레이 (파란색)
+                    vis_rev_overlay = self.create_mask_overlay(img_pil, final_reverse_mask_resized, color=(255, 0, 0))
+                    # 역방향 BBox (빨간색)
+                    vis_rev_bbox = self.create_bbox_overlay(img_pil, final_reverse_mask_resized, color=(0, 255, 0))
 
+                    # 파일 저장
                     vis_id.save(os.path.join(ID_MASK_OUTPUT_DIR, base_name + "_id_mask.jpg"), quality=95)
                     vis_overlay.save(os.path.join(OVERLAY_OUTPUT_DIR, base_name + "_overlay.jpg"), quality=95)
                     vis_bbox.save(os.path.join(BBOX_OUTPUT_DIR, base_name + "_bbox.jpg"), quality=95)
+                    
+                    # Reverse 결과 저장
+                    vis_rev_bbox.save(os.path.join(REVERSE_BBOX_OUTPUT_DIR, base_name + "_rev_bbox.jpg"), quality=95)
+                    # [NEW] Reverse Overlay 저장
+                    vis_rev_overlay.save(os.path.join(REVERSE_OVERLAY_OUTPUT_DIR, base_name + "_rev_overlay.jpg"), quality=95)
 
                 except Exception as e:
                     print(f"\nError processing {filename}: {e}")
@@ -433,7 +502,7 @@ class InteractiveBatchLabeler:
                     traceback.print_exc()
                 
         print("\n\nAll Done.")
-        print(total_time / max(1, cnt))
+        print(f"Avg Time: {total_time / max(1, cnt):.4f} sec")
 
     def create_overlay_with_id(self, original_img_pil, detected_objects, dsize):
         img_np = np.array(original_img_pil)
@@ -455,13 +524,10 @@ class InteractiveBatchLabeler:
                 if M["m00"] != 0:
                     cX, cY = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
                     
-                    # [NEW] ID와 점수(%)를 함께 표시
                     score_txt = f"{obj['score']*100:.1f}%"
                     label = f"ID:{obj['id']} ({score_txt})"
                     
-                    # 텍스트 외곽선 (가독성 UP)
                     cv2.putText(vis_img, label, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3)
-                    # 텍스트 본문
                     cv2.putText(vis_img, label, (cX, cY), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         return Image.fromarray(vis_img)
 
