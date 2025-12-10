@@ -35,7 +35,7 @@ def setup_directories():
 defect = 'hynix'  
 REF_DIR = f"C:/data/Sam3/{defect}/ref"
 TARGET_FOLDER = f"C:/data/Sam3/{defect}/target"
-CONFIDENCE_SCORE = 0
+CONFIDENCE_SCORE = -2
 
 # 색상 팔레트
 np.random.seed(42)

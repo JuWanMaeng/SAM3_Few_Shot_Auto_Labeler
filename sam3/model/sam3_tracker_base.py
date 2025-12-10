@@ -1,7 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
 import logging
-
+import torchvision as v
 import torch
 import torch.nn.functional as F
 
@@ -1049,6 +1049,9 @@ class Sam3TrackerBase(torch.nn.Module):
             obj_ptr,
             object_score_logits,
         ) = sam_outputs
+
+        # 마스크 디버깅
+        # v.utils.save_image(sam_outputs[0], 'mask.png')
 
         # 최종 예측 결과 저장 (출력 및 평가를 위한 모든 보정 단계 이후의 결과)
         current_out["pred_masks"] = low_res_masks
