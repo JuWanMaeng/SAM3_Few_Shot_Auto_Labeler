@@ -192,8 +192,9 @@ class Sam3Processor:
         out_logits = outputs["pred_logits"]
         out_masks = outputs["pred_masks"]
         out_probs = out_logits.sigmoid()
-        presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
-        out_probs = (out_probs * presence_score).squeeze(-1)
+        # presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
+        # out_probs = (out_probs * presence_score).squeeze(-1)
+        out_probs = (out_probs * 1).squeeze(-1)        
 
         keep = out_probs > self.confidence_threshold
         out_probs = out_probs[keep]
