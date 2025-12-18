@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 # ==========================================
 INPUT_SIZE = (1024, 1024) 
 TEMP_DIR = "./temp_frames"
-BASE_OUTPUT_DIR = "./output"
+BASE_OUTPUT_DIR = "output"
 
 # 출력 경로 설정
 MASK_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "masks")
@@ -19,6 +19,8 @@ BBOX_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "bboxes")
 REVERSE_MASK_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "reverse_masks")
 REVERSE_BBOX_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "reverse_bboxes")
 REVERSE_OVERLAY_OUTPUT_DIR = os.path.join(BASE_OUTPUT_DIR, "reverse_overlays")
+
+checkpoin_path = 'models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt'
 
 def setup_directories():
     if os.path.exists(TEMP_DIR): shutil.rmtree(TEMP_DIR)
@@ -32,10 +34,11 @@ def setup_directories():
         os.makedirs(path, exist_ok=True)
 
 # [사용자 데이터 경로]
-defect = 'hynix'  
-REF_DIR = f"C:/data/Sam3/{defect}/ref"
-TARGET_FOLDER = f"C:/data/Sam3/{defect}/target"
+defect = 'particles'  
+REF_DIR = f"/data/Sam3/{defect}/ref"
+TARGET_FOLDER = f"/data/Sam3/{defect}/target"
 CONFIDENCE_SCORE = -2
+
 
 # 색상 팔레트
 np.random.seed(42)

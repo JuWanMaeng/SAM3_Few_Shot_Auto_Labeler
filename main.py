@@ -18,7 +18,7 @@ class InteractiveBatchLabeler:
         config.setup_directories()
         
         print("Loading SAM 3 Model...")
-        self.sam3_model = build_sam3_video_model()
+        self.sam3_model = build_sam3_video_model('models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt')
         self.predictor = self.sam3_model.tracker
         self.predictor.backbone = self.sam3_model.detector.backbone
         print("Model Loaded.")
