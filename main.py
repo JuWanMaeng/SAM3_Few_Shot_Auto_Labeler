@@ -245,7 +245,7 @@ class InteractiveBatchLabeler:
                         reverse_mask = np.ones((target_orig_size[1], target_orig_size[0]), dtype=np.uint8)
 
                     # 마스크 저장
-                    Image.fromarray((final_mask * 255).astype(np.uint8)).save(os.path.join(config.MASK_OUTPUT_DIR, base_name + "_mask.png"))
+                    # Image.fromarray((final_mask * 255).astype(np.uint8)).save(os.path.join(config.MASK_OUTPUT_DIR, base_name + "_mask.png"))
                     
                     # Visualizer 클래스를 사용하여 시각화 저장
                     Visualizer.save_visualizations(img_pil, detected_objects, final_mask, reverse_mask, base_name, target_orig_size)

@@ -13,11 +13,11 @@ from sam3.model.sam3_image_processor import Sam3Processor
 # 1. 설정 (Configuration)
 # ==========================================
 # 입력 이미지가 있는 폴더 경로
-INPUT_FOLDER = "/data/Sam3/bump/ref" 
+INPUT_FOLDER = "/data/Sam3/cells/target" 
 # 결과 저장 경로
-OUTPUT_FOLDER = "outputs_masks"
+OUTPUT_FOLDER = "outputs/cells"
 # 모든 이미지에 적용할 텍스트 프롬프트
-TEXT_PROMPT = "line" 
+TEXT_PROMPT = "cell" 
 # 모델 체크포인트 경로 (사용자 환경에 맞게 수정)
 CHECKPOINT_PATH = 'models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt'
 
@@ -116,7 +116,7 @@ def save_combined_mask(pil_img, results, base_name):
     # --- 저장 ---
     # 1. 마스크 파일 (흑백)
     mask_filename = os.path.join(OUTPUT_FOLDER, f"{base_name}_mask.png")
-    cv2.imwrite(mask_filename, combined_mask * 255)
+    # cv2.imwrite(mask_filename, combined_mask * 255)
     
     # 2. 오버레이 파일 (확인용, 원본 + 붉은색 마스크)
     overlay = img_cv.copy()

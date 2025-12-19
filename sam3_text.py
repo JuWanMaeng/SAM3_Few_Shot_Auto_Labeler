@@ -88,14 +88,14 @@ bpe_path = f"{sam3_root}/assets/bpe_simple_vocab_16e6.txt.gz"
 model = build_sam3_image_model(bpe_path=bpe_path, checkpoint_path='models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt')
 
 image_path = f"{sam3_root}/assets/images/test_image.jpg"
-image_path = f"kla.jpg"
+image_path = f"cell_particle.png"
 image = Image.open(image_path)
 width, height = image.size
-processor = Sam3Processor(model, confidence_threshold=0.2)
+processor = Sam3Processor(model, confidence_threshold=0.5)
 inference_state = processor.set_image(image)
 
 processor.reset_all_prompts(inference_state)
-inference_state = processor.set_text_prompt(state=inference_state, prompt="hair")
+inference_state = processor.set_text_prompt(state=inference_state, prompt="particle")
 
 img0 = Image.open(image_path)
 save_opencv_results(img0, inference_state,output_name='sam3_test')

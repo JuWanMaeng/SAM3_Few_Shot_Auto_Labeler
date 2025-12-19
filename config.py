@@ -36,7 +36,7 @@ def setup_directories():
 # [사용자 데이터 경로]
 defect = 'particles'  
 REF_DIR = f"/data/Sam3/{defect}/ref"
-TARGET_FOLDER = f"/data/Sam3/{defect}/target"
+TARGET_FOLDER = f"/data/Sam3/{defect}/target_exp"
 CONFIDENCE_SCORE = -2
 
 

@@ -12,20 +12,20 @@ class Visualizer:
         검출 결과(Mask, Overlay, BBox)를 저장하는 메인 함수
         """
         # 1. ID Mask & Overlay
-        vis_id = Visualizer.create_overlay_with_id(img_pil, detected_objects, size)
         vis_overlay = Visualizer.create_mask_overlay(img_pil, final_mask, color=(255, 0, 0))
-        vis_bbox = Visualizer.create_bbox_overlay(img_pil, final_mask, color=(0, 255, 0))
+        # vis_id = Visualizer.create_overlay_with_id(img_pil, detected_objects, size)
+        # vis_bbox = Visualizer.create_bbox_overlay(img_pil, final_mask, color=(0, 255, 0))
         
-        vis_id.save(os.path.join(config.ID_MASK_OUTPUT_DIR, base_name + "_id_mask.jpg"))
         vis_overlay.save(os.path.join(config.OVERLAY_OUTPUT_DIR, base_name + "_overlay.jpg"))
-        vis_bbox.save(os.path.join(config.BBOX_OUTPUT_DIR, base_name + "_bbox.jpg"))
+        # vis_id.save(os.path.join(config.ID_MASK_OUTPUT_DIR, base_name + "_id_mask.jpg"))
+        # vis_bbox.save(os.path.join(config.BBOX_OUTPUT_DIR, base_name + "_bbox.jpg"))
         
         # 2. Reverse Outputs
-        vis_rev_overlay = Visualizer.create_mask_overlay(img_pil, reverse_mask, color=(255, 0, 0))
-        vis_rev_bbox = Visualizer.create_bbox_overlay(img_pil, reverse_mask, color=(0, 255, 0))
+        # vis_rev_overlay = Visualizer.create_mask_overlay(img_pil, reverse_mask, color=(255, 0, 0))
+        # vis_rev_bbox = Visualizer.create_bbox_overlay(img_pil, reverse_mask, color=(0, 255, 0))
         
-        vis_rev_overlay.save(os.path.join(config.REVERSE_OVERLAY_OUTPUT_DIR, base_name + "_rev_overlay.jpg"))
-        vis_rev_bbox.save(os.path.join(config.REVERSE_BBOX_OUTPUT_DIR, base_name + "_rev_bbox.jpg"))
+        # vis_rev_overlay.save(os.path.join(config.REVERSE_OVERLAY_OUTPUT_DIR, base_name + "_rev_overlay.jpg"))
+        # vis_rev_bbox.save(os.path.join(config.REVERSE_BBOX_OUTPUT_DIR, base_name + "_rev_bbox.jpg"))
 
     @staticmethod
     def create_overlay_with_id(original_img_pil, detected_objects, dsize):
