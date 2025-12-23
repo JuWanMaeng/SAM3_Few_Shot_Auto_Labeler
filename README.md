@@ -1,8 +1,11 @@
-# 🌌 SAM 3 Interactive Batch Labeler
+# 🌌 SAM3_Few_Shot_Auto_Labeler
 
-이 프로젝트는 **SAM 3 (Segment Anything Model 3)**의 비디오 전파(Video Propagation) 알고리즘을 배치 이미지 처리에 응용한 **고성능 자동 라벨링 및 결함 검출 도구**입니다. 사용자가 최소한의 참조 이미지에 가이드를 주면, 수천 장의 타겟 이미지에서 동일한 객체를 추적하고 마스킹합니다.
+이 프로젝트는 **SAM 3 (Segment Anything Model 3)**의 비디오 전파(Video Propagation) 알고리즘을 배치 이미지 처리에 응용한 **고성능 자동 라벨링 및 결함 검출 도구**입니다. 사용자가 최소한의 참조 이미지에 가이드를 주면, 무한대의 타겟 이미지에서 동일한 객체를 추적하고 마스킹합니다.
 
-![SAM 3 architecture](assets/pipeline.png?raw=true) SAM 3 is a unified foundation model for promptable segmentation in images and videos. It can detect, segment, and track objects using text or visual prompts such as points, boxes, and masks. Compared to its predecessor [SAM 2](https://github.com/facebookresearch/sam2), SAM 3 introduces the ability to exhaustively segment all instances of an open-vocabulary concept specified by a short text phrase or exemplars. Unlike prior work, SAM 3 can handle a vastly larger set of open-vocabulary prompts. It achieves 75-80% of human performance on our new [SA-CO benchmark](https://github.com/facebookresearch/sam3?tab=readme-ov-file#sa-co-dataset) which contains 270K unique concepts, over 50 times more than existing benchmarks.
+![SAM 3 architecture](assets/pipeline.png?raw=true) 
+
+## User interface
+![User interface](assets/image.png?raw=true) 
 
 ## 📋 핵심 기술 스택
 
@@ -49,7 +52,7 @@ SAM 3 체크포인트 파일을 다음 경로에 배치하십시오.
 | **Point** | 좌클릭(+), 우클릭(-) | 특정 위치 포함/제외 힌트 |
 | **Brush** | `B` 키 전환 후 드래그 | 세밀한 엣지 보정 (휠로 브러시 크기 조절) |
 
-### 2. 고속 배치 추론 (`main.py`)
+### 2. 추론 (`main.py`)
 
 * **Reference Encoding:** 사용자가 라벨링한 정보를 SAM 3의 Feature 공간으로 임베딩합니다.
 * **Propagation:** 비디오 프레임 간의 연속성을 추적하는 기술을 활용하여 타겟 이미지 간의 객체 일관성을 유지합니다.
@@ -57,7 +60,7 @@ SAM 3 체크포인트 파일을 다음 경로에 배치하십시오.
 
 ## 🚀 실행 가이드
 
-1. **`config.py` 수정:** 결함 타입(`defect`)과 경로를 설정합니다.
+1. **`config.py` 수정:** 결함 타입(`defect`)과 데이터 경로를 설정합니다.
 2. **프로그램 시작:** `python main.py` 실행.
 3. **가이드 입력:** 팝업되는 GUI 창에서 참조 이미지에 결함 영역을 표시합니다.
 4. **결과 확인:** `output/` 폴더 내의 시각화 데이터를 분석합니다.
