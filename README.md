@@ -1,10 +1,10 @@
-# 🌌 SAM3_Few_Shot_Auto_Labeler
+# 🌌 SAM3_Few_Shot_Auto_Labeller
 
 이 프로젝트는 **SAM 3 (Segment Anything Model 3)**의 비디오 전파(Video Propagation) 알고리즘을 배치 이미지 처리에 응용한 **고성능 자동 라벨링 및 결함 검출 도구**입니다. 사용자가 최소한의 참조 이미지에 가이드를 주면, 무한대의 타겟 이미지에서 동일한 객체를 추적하고 마스킹합니다.
 
 ![SAM 3 architecture](assets/pipeline.png?raw=true) 
 
-## User interface
+# User interface
 ![User interface](assets/image.png?raw=true) 
 
 ## 📋 핵심 기술 스택
